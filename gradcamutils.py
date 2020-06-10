@@ -9,6 +9,7 @@ import tensorflow as tf
 tf.compat.v1.disable_eager_execution()
 
 import matplotlib.pyplot as plt
+import cv2
 
 def normalize(x):
         """Utility function to normalize a tensor by its L2 norm"""
@@ -34,10 +35,32 @@ def grad_cam(input_model, image, layer_name,H=224,W=224):
     cam = np.maximum(cam, 0)
 #     cam = np.resize(cam, (H, W))
     cam = zoom(cam,H/cam.shape[0])
-    print (cam.shape)
     #cam = np.maximum(cam, 0)
     cam = cam / cam.max()
     return cam
+
+def grad_cam_batch(input_model, images, classes, layer_name, H=224, W=224):
+    """GradCAM method for visualizing input saliency.
+    Same as grad_cam but processes multiple images in one run."""
+    loss = tf.gather_nd(input_model.output, np.dstack([range(images.shape[0]), classes])[0])
+    layer_output = input_model.get_layer(layer_name).output
+    grads = K.gradients(loss, layer_output)[0]
+    gradient_fn = K.function([input_model.input, K.learning_phase()], [layer_output, grads])
+
+    conv_output, grads_val = gradient_fn([images, 0])    
+    weights = np.mean(grads_val, axis=(1, 2))
+    cams = np.einsum('ijkl,il->ijk', conv_output, weights)
+    
+    # Process CAMs
+    new_cams = np.empty((images.shape[0], W, H))
+    for i in range(new_cams.shape[0]):
+        cam_i = cams[i] - cams[i].mean()
+        cam_i = (cam_i + 1e-10) / (np.linalg.norm(cam_i, 2) + 1e-10)
+        new_cams[i] = cv2.resize(cam_i, (H, W), cv2.INTER_LINEAR)
+        new_cams[i] = np.maximum(new_cams[i], 0)
+        new_cams[i] = new_cams[i] / new_cams[i].max()
+    
+    return new_cams
 
 def grad_cam_plus(input_model, img, layer_name,H=224,W=224):
     cls = np.argmax(input_model.predict(img))
